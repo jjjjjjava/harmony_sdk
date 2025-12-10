@@ -1,0 +1,11 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "FFmpeg Tools 测试入口",
+  "main": "",
+  "author": "prq",
+  "license": "MIT",
+  "dependencies": {
+    "lib_ffmpeg_utils": "file:../lib_ffmpeg_utils"
+  }
+}
