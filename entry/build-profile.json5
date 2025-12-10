@@ -1,6 +1,12 @@
 {
   "apiType": "stageMode",
   "buildOption": {
+    "napiLibFilterOption": {
+      "excludes": [
+        "**/armeabi-v7a/**",
+        "**/x86_64/**"
+      ]
+    }
   },
   "buildOptionSet": [
     {
