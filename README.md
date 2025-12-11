@@ -36,9 +36,9 @@ ffmpeg -i https://example.com/video.mp4 -c:v copy -c:a copy -f avi -y /data/stor
 **示例结果：**
 
 - 进行多个格式转换
-  - ![结果1](./src/main/resources/base/media/pic1.png)
+    - ![结果1](./lib_ffmpeg_utils/src/main/resources/base/media/pic1.png)
 - 提取到电脑上播放
-  - ![结果2](./src/main/resources/base/media/pic2.png)
+    - ![结果2](./lib_ffmpeg_utils/src/main/resources/base/media/pic2.png)
 
 ## 快速开始
 
@@ -179,8 +179,8 @@ FFMpegUtils.executeFFmpegCommand({
    ```
 
 2. **包体积优化**：当前 `libffmpegutils.so` 约 70MB（依赖完整 FFmpeg 库）
-   - 建议在 `module.json5` 中开启压缩：`"compressNativeLibs": true`
-   - 可参考华为官方方案进行拆分与裁剪：[华为开发者博客](https://developer.huawei.com/consumer/cn/blog/topic/03171278604140060)
+    - 建议在 `module.json5` 中开启压缩：`"compressNativeLibs": true`
+    - 可参考华为官方方案进行拆分与裁剪：[华为开发者博客](https://developer.huawei.com/consumer/cn/blog/topic/03171278604140060)
 
 3. **架构支持**：仅支持 arm64-v8a 架构
 
@@ -190,18 +190,18 @@ FFMpegUtils.executeFFmpegCommand({
 
 6. **当前优化：**
 
-   1. 优化包体积管理，aki通过依赖引入，其自带了多个架构的so文件，nativeLib 配置来过滤无用的架构
+    1. 优化包体积管理，aki通过依赖引入，其自带了多个架构的so文件，nativeLib 配置来过滤无用的架构
 
-      ```
-      "buildOption": {
-          "napiLibFilterOption": {
-            "excludes": [
-              "**/armeabi-v7a/**",
-              "**/x86_64/**"
-            ]
-          }
-        },
-      ```
+       ```
+       "buildOption": {
+           "napiLibFilterOption": {
+             "excludes": [
+               "**/armeabi-v7a/**",
+               "**/x86_64/**"
+             ]
+           }
+         },
+       ```
 
 ## 相关文档
 
