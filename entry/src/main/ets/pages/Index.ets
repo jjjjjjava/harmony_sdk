@@ -7,8 +7,9 @@
  */
 
 import { buffer } from '@kit.ArkTS';
-import { FFmpegManager, FFmpegFactory, TaskCallback, FLog } from 'lib_ffmpeg_utils';
+import { FFmpegManager, FFmpegFactory, FFmpegCommandBuilder, TaskCallback, FLog, ContainerFormat, FFMpegUtils } from 'lib_ffmpeg_utils';
 import { fileIo } from '@kit.CoreFileKit';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
 
 // 转换格式类型
 type ConvertFormat = 'mp4' | 'flv' | 'avi' | 'mkv' | 'ts' | 'mp3' | 'aac';
@@ -17,7 +18,7 @@ type ConvertFormat = 'mp4' | 'flv' | 'avi' | 'mkv' | 'ts' | 'mp3' | 'aac';
 @Component
 struct Index {
   // 测试视频 URL (base64 编码)
-  static TEST_VIDEO_URL = buffer.from(
+  static TEST_VIDEO_URL: string = buffer.from(
     'aHR0cHM6Ly9zbnMtdmlkZW8tYWwueGhzY2RuLmNvbS9zdHJlYW0vMTEwLzQwNS8wMWU1ODNjYjZlMGZlZDVhMDEwMzcwMDM4YzhhZDk2MmZiXzQwNS5tcDQ=',
     'base64'
   ).toString('binary');
@@ -27,24 +28,61 @@ struct Index {
   @State isConverting: boolean = false;
   @State logs: string[] = [];
 
-  // 单任务耗时
-  @State singleTaskTime: string = '--';
-  // 格式转换耗时
-  @State formatConvertTime: string = '--';
-  // 当前选择的格式
+  // 耗时统计
+  @State copyTime: string = '--';
+  @State formatTime: string = '--';
+  @State hwTime: string = '--';
   @State selectedFormat: ConvertFormat = 'flv';
 
   private outputFilePath: string = '';
   private taskId: string = '';
+  @State watermarkPath: string = '';
 
-  aboutToAppear() {
+  aboutToAppear(): void {
+    // 默认开启 native 层日志
+    FFMpegUtils.showLog(true);
+    
     this.addLog('FFmpeg 测试页面初始化');
     this.addLog('⚠️ FFmpeg 不支持多线程并发，任务串行执行');
-    this.addLog('支持格式: MP4, FLV, AVI, MKV, TS, MP3, AAC');
+    this.addLog('🔧 硬件加速: h264_ohosavcodec');
+    this.addLog('📝 Native 日志已开启');
     this.outputFilePath = getContext().filesDir + '/test_output.mp4';
   }
 
-  addLog(message: string) {
+  /** 从图库选择水印图片 */
+  async selectWatermark(): Promise<boolean> {
+    try {
+      const picker = new photoAccessHelper.PhotoViewPicker();
+      const result = await picker.select({
+        MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE,
+        maxSelectNumber: 1
+      });
+      if (result.photoUris.length > 0) {
+        const uri = result.photoUris[0];
+        // 复制到应用沙箱目录
+        const destPath = getContext().filesDir + '/watermark_selected.png';
+        const srcFile = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
+        const destFile = fileIo.openSync(destPath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+        const buf = new ArrayBuffer(4096);
+        let readLen = fileIo.readSync(srcFile.fd, buf);
+        while (readLen > 0) {
+          fileIo.writeSync(destFile.fd, buf, { length: readLen });
+          readLen = fileIo.readSync(srcFile.fd, buf);
+        }
+        fileIo.closeSync(srcFile);
+        fileIo.closeSync(destFile);
+        this.watermarkPath = destPath;
+        this.addLog(`✅ 已选择水印: ${uri}`);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      this.addLog(`❌ 选择水印失败: ${error}`);
+      return false;
+    }
+  }
+
+  addLog(message: string): void {
     const timestamp = new Date().toLocaleTimeString();
     const logMessage = `[${timestamp}] ${message}`;
     this.logs.push(logMessage);
@@ -55,203 +93,272 @@ struct Index {
     }
   }
 
-  /**
-   * 单任务转换测试
-   */
-  async convertVideoFromUrl() {
-    if (this.isConverting) {
-      this.addLog('⚠️ 正在转换中，请稍候...');
-      return;
-    }
-
-    this.isConverting = true;
-    this.convertProgress = 0;
-    this.singleTaskTime = '计时中...';
-    this.statusText = '开始从URL转换视频...';
-    this.addLog('🚀 开始 FFmpeg 单任务转换');
-
-    const startTime = Date.now();
-    this.executeFFmpegConversion(startTime);
-  }
-
-  /**
-   * 格式转换测试
-   */
-  async convertToFormat(format: ConvertFormat) {
-    if (this.isConverting) {
-      this.addLog('⚠️ 正在转换中，请稍候...');
-      return;
-    }
-
-    this.isConverting = true;
-    this.convertProgress = 0;
-    this.formatConvertTime = '计时中...';
-    this.selectedFormat = format;
-
-    const outputPath = getContext().filesDir + `/test_output.${format}`;
-    this.statusText = `转换为 ${format.toUpperCase()}...`;
-    this.addLog(`🚀 开始转换: MP4 → ${format.toUpperCase()}`);
-    this.addLog(`输出: ${outputPath}`);
-
-    const startTime = Date.now();
-
-    // 根据格式选择不同的转换命令
-    let commands: string[];
-    switch (format) {
-      case 'flv':
-        commands = FFmpegFactory.buildMp42Flv(Index.TEST_VIDEO_URL, outputPath);
-        break;
-      case 'avi':
-        commands = FFmpegFactory.buildMp42Avi(Index.TEST_VIDEO_URL, outputPath);
-        break;
-      case 'mkv':
-        commands = FFmpegFactory.buildMp42Mkv(Index.TEST_VIDEO_URL, outputPath);
-        break;
-      case 'ts':
-        commands = FFmpegFactory.buildMp42Ts(Index.TEST_VIDEO_URL, outputPath);
-        break;
-      case 'mp3':
-        commands = FFmpegFactory.buildExtractMp3(Index.TEST_VIDEO_URL, outputPath);
-        break;
-      case 'aac':
-        commands = FFmpegFactory.buildExtractAac(Index.TEST_VIDEO_URL, outputPath);
-        break;
-      default:
-        commands = FFmpegFactory.buildMp42Mp4(Index.TEST_VIDEO_URL, outputPath);
-    }
-
-    this.addLog(`命令: ${commands.join(' ')}`);
-
-    try {
-      this.taskId = FFmpegManager.getInstance().execute(
-        commands,
-        120000,
-        Object({
-          onStart: () => {
-            this.addLog(`🎬 转换任务已启动`);
-          },
-          onProgress: (progress: number) => {
-            this.convertProgress = progress * 100;
-            this.statusText = `转换 ${format.toUpperCase()}: ${this.convertProgress.toFixed(1)}%`;
-          },
-          onSuccess: () => {
-            const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-            this.formatConvertTime = `${duration}s`;
-            this.statusText = `✅ 转换完成: ${format.toUpperCase()}`;
-            this.addLog(`✅ 转换成功！`);
-            this.addLog(`📊 耗时: ${duration}s`);
-            this.checkOutputFileByPath(outputPath);
-            this.isConverting = false;
-          },
-          onFailure: () => {
-            this.formatConvertTime = '失败';
-            this.statusText = `❌ 转换失败: ${format.toUpperCase()}`;
-            this.addLog(`❌ 转换失败`);
-            this.isConverting = false;
-          },
-          onTimeout: () => {
-            this.formatConvertTime = '超时';
-            this.statusText = '⏱️ 转换超时';
-            this.addLog('⏱️ 任务超时');
-            this.isConverting = false;
-          },
-          onCancelled: () => {
-            this.formatConvertTime = '已取消';
-            this.statusText = '🚫 已取消';
-            this.addLog('🚫 任务已取消');
-            this.isConverting = false;
-          }
-        }) as TaskCallback
-      );
-
-      this.addLog(`任务ID: ${this.taskId}`);
-    } catch (error) {
-      this.statusText = '❌ 执行错误';
-      this.addLog(`❌ 执行错误: ${error}`);
-      this.isConverting = false;
-    }
-  }
-
-  async checkOutputFileByPath(path: string) {
+  checkOutputFile(path: string): void {
     try {
       const stat = fileIo.statSync(path);
-      this.addLog(`✅ 输出文件大小: ${(stat.size / 1024).toFixed(2)} KB`);
+      this.addLog(`✅ 输出文件: ${(stat.size / 1024).toFixed(2)} KB`);
     } catch (error) {
       this.addLog(`⚠️ 无法读取输出文件: ${error}`);
     }
   }
 
-  private executeFFmpegConversion(startTime: number) {
-    try {
-      this.taskId = FFmpegManager.getInstance().execute(
-        FFmpegFactory.buildMp42Mp4(Index.TEST_VIDEO_URL, this.outputFilePath),
-        120000,
-        Object({
-          onStart: () => {
-            this.addLog('🎬 FFmpeg 任务已启动');
-          },
-          onProgress: (progress: number) => {
-            this.convertProgress = progress * 100;
-            this.statusText = `转换中: ${this.convertProgress.toFixed(1)}%`;
-          },
-          onSuccess: () => {
-            const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-            this.singleTaskTime = `${duration}s`;
-            this.statusText = '✅ 转换完成';
-            this.addLog('✅ 视频转换成功！');
-            this.addLog(`📊 单任务耗时: ${duration}s`);
-            this.checkOutputFile();
-            this.isConverting = false;
-          },
-          onFailure: () => {
-            this.singleTaskTime = '失败';
-            this.statusText = '❌ 转换失败';
-            this.addLog('❌ 视频转换失败');
-            this.isConverting = false;
-          },
-          onTimeout: () => {
-            this.singleTaskTime = '超时';
-            this.statusText = '⏱️ 转换超时';
-            this.addLog('⏱️ 任务超时');
-            this.isConverting = false;
-          },
-          onCancelled: () => {
-            this.singleTaskTime = '已取消';
-            this.statusText = '🚫 已取消';
-            this.addLog('🚫 任务已取消');
-            this.isConverting = false;
-          }
-        }) as TaskCallback
-      );
+  // ============================================================
+  // 零拷贝测试
+  // ============================================================
 
+  /** MP4 复制 */
+  testCopy(): void {
+    if (this.isConverting) return;
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.copyTime = '计时中...';
+    this.statusText = '开始 MP4 复制...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('🚀 MP4 复制（零拷贝）');
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + '/copy_output.mp4';
+    const cmd = FFmpegFactory.remux(Index.TEST_VIDEO_URL, output, ContainerFormat.MP4);
+    this.addLog(`命令: ${cmd.join(' ')}`);
+
+    this.executeTask(cmd, startTime, (duration: string): void => {
+      this.copyTime = duration;
+      this.checkOutputFile(output);
+    });
+  }
+
+  /** 格式转换 */
+  testFormat(format: ConvertFormat): void {
+    if (this.isConverting) return;
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.formatTime = '计时中...';
+    this.selectedFormat = format;
+    this.statusText = `转换为 ${format.toUpperCase()}...`;
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog(`🚀 格式转换: MP4 → ${format.toUpperCase()}`);
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + `/output.${format}`;
+    let cmd: string[];
+
+    switch (format) {
+      case 'flv':
+        cmd = FFmpegFactory.remux(Index.TEST_VIDEO_URL, output, ContainerFormat.FLV);
+        break;
+      case 'avi':
+        cmd = FFmpegFactory.remux(Index.TEST_VIDEO_URL, output, ContainerFormat.AVI);
+        break;
+      case 'mkv':
+        cmd = FFmpegFactory.remux(Index.TEST_VIDEO_URL, output, ContainerFormat.MKV);
+        break;
+      case 'ts':
+        cmd = FFmpegFactory.remux(Index.TEST_VIDEO_URL, output, ContainerFormat.TS);
+        break;
+      case 'mp3':
+      case 'aac':
+        cmd = FFmpegFactory.extractAudio(Index.TEST_VIDEO_URL, output);
+        break;
+      default:
+        cmd = FFmpegFactory.remux(Index.TEST_VIDEO_URL, output, ContainerFormat.MP4);
+    }
+
+    this.addLog(`命令: ${cmd.join(' ')}`);
+    this.executeTask(cmd, startTime, (duration: string): void => {
+      this.formatTime = duration;
+      this.checkOutputFile(output);
+    });
+  }
+
+  // ============================================================
+  // 硬解硬编测试
+  // ============================================================
+
+  /** 视频缩放（硬解硬编） */
+  testScale(): void {
+    if (this.isConverting) return;
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.hwTime = '计时中...';
+    this.statusText = '🚀 硬解硬编缩放...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('🔧 视频缩放（硬解硬编）');
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + '/scale_720p.mp4';
+    const cmd = FFmpegFactory.scale(Index.TEST_VIDEO_URL, output, 1280, 720);
+    this.addLog(`命令: ${cmd.join(' ')}`);
+
+    this.executeTask(cmd, startTime, (duration: string): void => {
+      this.hwTime = duration;
+      this.checkOutputFile(output);
+    });
+  }
+
+  /** 视频转码（硬解硬编） */
+  testTranscode(): void {
+    if (this.isConverting) return;
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.hwTime = '计时中...';
+    this.statusText = '🚀 硬解硬编转码...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('🔧 视频转码（硬解硬编 2Mbps）');
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + '/transcode_2m.mp4';
+    const cmd = FFmpegFactory.transcode(Index.TEST_VIDEO_URL, output, '2M');
+    this.addLog(`命令: ${cmd.join(' ')}`);
+
+    this.executeTask(cmd, startTime, (duration: string): void => {
+      this.hwTime = duration;
+      this.checkOutputFile(output);
+    });
+  }
+
+  /** 添加水印（硬解硬编） */
+  async testWatermark(): Promise<void> {
+    if (this.isConverting) return;
+
+    // 如果没有选择水印，先让用户选择
+    if (this.watermarkPath === '') {
+      this.addLog('📷 请先选择水印图片...');
+      const selected = await this.selectWatermark();
+      if (!selected) {
+        this.addLog('⚠️ 未选择水印图片，取消操作');
+        return;
+      }
+    }
+
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.hwTime = '计时中...';
+    this.statusText = '🚀 硬解硬编水印...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('🔧 添加水印（硬解硬编）');
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + '/watermark_output.mp4';
+    const cmd = FFmpegFactory.watermark(Index.TEST_VIDEO_URL, this.watermarkPath, output);
+    this.addLog(`命令: ${cmd.join(' ')}`);
+
+    this.executeTask(cmd, startTime, (duration: string): void => {
+      this.hwTime = duration;
+      this.checkOutputFile(output);
+    });
+  }
+
+  /** 视频裁剪 */
+  testCut(): void {
+    if (this.isConverting) return;
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.hwTime = '计时中...';
+    this.statusText = '✂️ 视频裁剪...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('✂️ 视频裁剪（零拷贝）');
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + '/cut_30s.mp4';
+    const cmd = FFmpegFactory.cut(Index.TEST_VIDEO_URL, output, '00:00:10', '30');
+    this.addLog(`命令: ${cmd.join(' ')}`);
+
+    this.executeTask(cmd, startTime, (duration: string): void => {
+      this.hwTime = duration;
+      this.checkOutputFile(output);
+    });
+  }
+
+  /** Builder 自定义命令 */
+  testBuilder(): void {
+    if (this.isConverting) return;
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.hwTime = '计时中...';
+    this.statusText = '🛠️ Builder 自定义...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('🛠️ Builder 自定义命令');
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + '/builder_output.mp4';
+
+    const cmd = new FFmpegCommandBuilder()
+      .input(Index.TEST_VIDEO_URL)
+      .hwaccel()
+      .scale(1280, 720)
+      .fps(30)
+      .videoBitrate('2M')
+      .audioCodec('aac')
+      .audioBitrate('128k')
+      .output(output)
+      .build();
+
+    this.addLog(`命令: ${cmd.join(' ')}`);
+
+    this.executeTask(cmd, startTime, (duration: string): void => {
+      this.hwTime = duration;
+      this.checkOutputFile(output);
+    });
+  }
+
+  // ============================================================
+  // 通用执行方法
+  // ============================================================
+
+  executeTask(cmd: string[], startTime: number, onComplete: (duration: string) => void): void {
+    try {
+      this.taskId = FFmpegManager.getInstance().execute(cmd, 180000, Object({
+        onStart: (): void => {
+          this.addLog('🎬 任务已启动');
+        },
+        onProgress: (progress: number): void => {
+          this.convertProgress = progress * 100;
+          this.statusText = `进度: ${this.convertProgress.toFixed(1)}%`;
+        },
+        onSuccess: (): void => {
+          const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+          this.statusText = '✅ 完成';
+          this.addLog(`✅ 成功！耗时: ${duration}s`);
+          onComplete(`${duration}s`);
+          this.isConverting = false;
+        },
+        onFailure: (): void => {
+          this.statusText = '❌ 失败';
+          this.addLog('❌ 任务失败');
+          onComplete('失败');
+          this.isConverting = false;
+        }
+      }) as TaskCallback);
       this.addLog(`任务ID: ${this.taskId}`);
     } catch (error) {
       this.statusText = '❌ 执行错误';
-      this.addLog(`❌ 执行错误: ${error}`);
+      this.addLog(`❌ 错误: ${error}`);
       this.isConverting = false;
     }
   }
 
-  async checkOutputFile() {
-    try {
-      const stat = fileIo.statSync(this.outputFilePath);
-      this.addLog(`✅ 输出文件大小: ${stat.size} 字节`);
-    } catch (error) {
-      this.addLog(`⚠️ 无法读取输出文件: ${error}`);
-    }
-  }
-
-  cancelConvert() {
+  cancelTask(): void {
     if (this.taskId) {
       const success = FFmpegManager.getInstance().cancel(this.taskId);
-      this.addLog(success ? '🚫 已取消转换任务' : '⚠️ 取消失败');
+      this.addLog(success ? '🚫 已取消' : '⚠️ 取消失败');
     }
   }
 
-  clearLogs() {
+  clearLogs(): void {
     this.logs = [];
     this.addLog('日志已清空');
   }
+
+  resetTime(): void {
+    this.copyTime = '--';
+    this.formatTime = '--';
+    this.hwTime = '--';
+    this.addLog('⏱️ 计时已重置');
+  }
+
+  // ============================================================
+  // UI
+  // ============================================================
 
   build() {
     Column() {
@@ -276,53 +383,54 @@ struct Index {
               .fontWeight(FontWeight.Medium)
               .margin({ bottom: 12 })
 
-            // 耗时对比区域
+            // 耗时统计
             Row() {
               Column() {
-                Text('MP4复制耗时')
+                Text('复制耗时')
                   .fontSize(12)
                   .fontColor('#999999')
-                Text(this.singleTaskTime)
-                  .fontSize(20)
+                Text(this.copyTime)
+                  .fontSize(18)
                   .fontWeight(FontWeight.Bold)
                   .fontColor('#FF9900')
-              }
-              .layoutWeight(1)
+              }.layoutWeight(1)
 
-              Divider()
-                .vertical(true)
-                .height(40)
-                .color('#E5E5E5')
+              Divider().vertical(true).height(40).color('#E5E5E5')
 
               Column() {
-                Text(`转${this.selectedFormat.toUpperCase()}耗时`)
+                Text(`转${this.selectedFormat.toUpperCase()}`)
                   .fontSize(12)
                   .fontColor('#999999')
-                Text(this.formatConvertTime)
-                  .fontSize(20)
+                Text(this.formatTime)
+                  .fontSize(18)
                   .fontWeight(FontWeight.Bold)
                   .fontColor('#007DFF')
-              }
-              .layoutWeight(1)
+              }.layoutWeight(1)
+
+              Divider().vertical(true).height(40).color('#E5E5E5')
+
+              Column() {
+                Text('硬解硬编')
+                  .fontSize(12)
+                  .fontColor('#999999')
+                Text(this.hwTime)
+                  .fontSize(18)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor('#4CAF50')
+              }.layoutWeight(1)
             }
             .width('100%')
-            .padding({ top: 8, bottom: 8 })
-            .margin({ bottom: 12 })
+            .padding(8)
             .backgroundColor('#F5F5F5')
             .borderRadius(8)
+            .margin({ bottom: 12 })
 
-            // 转换进度
+            // 进度条
             Row() {
-              Text('进度:')
-                .fontSize(14)
-                .width(50)
-              Progress({ value: this.convertProgress, total: 100, type: ProgressType.Linear })
-                .width('60%')
-              Text(`${this.convertProgress.toFixed(1)}%`)
-                .fontSize(12)
-                .margin({ left: 8 })
-            }
-            .width('100%')
+              Text('进度:').fontSize(14).width(50)
+              Progress({ value: this.convertProgress, total: 100, type: ProgressType.Linear }).width('60%')
+              Text(`${this.convertProgress.toFixed(1)}%`).fontSize(12).margin({ left: 8 })
+            }.width('100%')
           }
           .width('100%')
           .padding(16)
@@ -330,9 +438,9 @@ struct Index {
           .borderRadius(8)
           .margin({ top: 12, left: 16, right: 16 })
 
-          // 操作按钮
+          // 零拷贝操作
           Column() {
-            Text('MP4 直接复制')
+            Text('零拷贝（最快）')
               .fontSize(14)
               .fontWeight(FontWeight.Medium)
               .width('100%')
@@ -341,134 +449,49 @@ struct Index {
             Button('MP4 复制 ⚡️')
               .width('100%')
               .height(44)
-              .fontSize(16)
               .backgroundColor('#FF9900')
               .enabled(!this.isConverting)
-              .onClick(() => {
-                this.convertVideoFromUrl();
-              })
+              .onClick((): void => this.testCopy())
 
-            Divider()
-              .margin({ top: 16, bottom: 16 })
-              .color('#E5E5E5')
+            Row() {
+              Button('FLV').layoutWeight(1).height(40).backgroundColor(this.selectedFormat === 'flv' ? '#007DFF' : '#999999').enabled(!this.isConverting).onClick((): void => this.testFormat('flv'))
+              Button('AVI').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor(this.selectedFormat === 'avi' ? '#007DFF' : '#999999').enabled(!this.isConverting).onClick((): void => this.testFormat('avi'))
+              Button('MKV').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor(this.selectedFormat === 'mkv' ? '#007DFF' : '#999999').enabled(!this.isConverting).onClick((): void => this.testFormat('mkv'))
+              Button('TS').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor(this.selectedFormat === 'ts' ? '#007DFF' : '#999999').enabled(!this.isConverting).onClick((): void => this.testFormat('ts'))
+            }.width('100%').margin({ top: 8 })
 
-            Text('格式转换测试')
+            Row() {
+              Button('提取音频 🎵').layoutWeight(1).height(40).backgroundColor('#999999').enabled(!this.isConverting).onClick((): void => this.testFormat('aac'))
+              Button('裁剪 30s ✂️').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#999999').enabled(!this.isConverting).onClick((): void => this.testCut())
+            }.width('100%').margin({ top: 8 })
+
+            Divider().margin({ top: 16, bottom: 16 }).color('#E5E5E5')
+
+            // 硬解硬编操作
+            Text('🔧 硬解硬编（h264_ohosavcodec）')
               .fontSize(14)
               .fontWeight(FontWeight.Medium)
               .width('100%')
               .margin({ bottom: 8 })
 
-            // 视频格式按钮
             Row() {
-              Button('FLV')
-                .layoutWeight(1)
-                .height(40)
-                .fontSize(14)
-                .backgroundColor(this.selectedFormat === 'flv' ? '#007DFF' : '#999999')
-                .enabled(!this.isConverting)
-                .onClick(() => {
-                  this.convertToFormat('flv');
-                })
-
-              Button('AVI')
-                .layoutWeight(1)
-                .height(40)
-                .fontSize(14)
-                .margin({ left: 8 })
-                .backgroundColor(this.selectedFormat === 'avi' ? '#007DFF' : '#999999')
-                .enabled(!this.isConverting)
-                .onClick(() => {
-                  this.convertToFormat('avi');
-                })
-
-              Button('MKV')
-                .layoutWeight(1)
-                .height(40)
-                .fontSize(14)
-                .margin({ left: 8 })
-                .backgroundColor(this.selectedFormat === 'mkv' ? '#007DFF' : '#999999')
-                .enabled(!this.isConverting)
-                .onClick(() => {
-                  this.convertToFormat('mkv');
-                })
-
-              Button('TS')
-                .layoutWeight(1)
-                .height(40)
-                .fontSize(14)
-                .margin({ left: 8 })
-                .backgroundColor(this.selectedFormat === 'ts' ? '#007DFF' : '#999999')
-                .enabled(!this.isConverting)
-                .onClick(() => {
-                  this.convertToFormat('ts');
-                })
-            }
-            .width('100%')
-            .margin({ bottom: 8 })
-
-            // 音频格式按钮
-            Row() {
-              Button('提取 MP3 🎵')
-                .layoutWeight(1)
-                .height(40)
-                .fontSize(14)
-                .backgroundColor(this.selectedFormat === 'mp3' ? '#007DFF' : '#999999')
-                .enabled(!this.isConverting)
-                .onClick(() => {
-                  this.convertToFormat('mp3');
-                })
-
-              Button('提取 AAC 🎵')
-                .layoutWeight(1)
-                .height(40)
-                .fontSize(14)
-                .margin({ left: 8 })
-                .backgroundColor(this.selectedFormat === 'aac' ? '#007DFF' : '#999999')
-                .enabled(!this.isConverting)
-                .onClick(() => {
-                  this.convertToFormat('aac');
-                })
-            }
-            .width('100%')
-
-            Divider()
-              .margin({ top: 16, bottom: 16 })
-              .color('#E5E5E5')
+              Button('缩放 720p 🚀').layoutWeight(1).height(40).backgroundColor('#4CAF50').enabled(!this.isConverting).onClick((): void => this.testScale())
+              Button('转码 2M 🚀').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#2196F3').enabled(!this.isConverting).onClick((): void => this.testTranscode())
+            }.width('100%')
 
             Row() {
-              Button('取消任务')
-                .layoutWeight(1)
-                .height(40)
-                .fontSize(14)
-                .backgroundColor('#FF6B6B')
-                .enabled(this.isConverting)
-                .onClick(() => {
-                  this.cancelConvert();
-                })
+              Button(this.watermarkPath === '' ? '选择水印 📷' : '添加水印 🚀').layoutWeight(1).height(40).backgroundColor('#9C27B0').enabled(!this.isConverting).onClick((): void => { this.testWatermark(); })
+              Button('Builder 🛠️').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#FF5722').enabled(!this.isConverting).onClick((): void => this.testBuilder())
+            }.width('100%').margin({ top: 8 })
 
-              Button('重置计时')
-                .layoutWeight(1)
-                .height(40)
-                .fontSize(14)
-                .margin({ left: 8 })
-                .backgroundColor('#007DFF')
-                .onClick(() => {
-                  this.singleTaskTime = '--';
-                  this.formatConvertTime = '--';
-                  this.addLog('⏱️ 计时已重置');
-                })
+            Divider().margin({ top: 16, bottom: 16 }).color('#E5E5E5')
 
-              Button('清空日志')
-                .layoutWeight(1)
-                .height(40)
-                .fontSize(14)
-                .margin({ left: 8 })
-                .backgroundColor('#999999')
-                .onClick(() => {
-                  this.clearLogs();
-                })
-            }
-            .width('100%')
+            // 控制按钮
+            Row() {
+              Button('取消').layoutWeight(1).height(40).backgroundColor('#FF6B6B').enabled(this.isConverting).onClick((): void => this.cancelTask())
+              Button('重置').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#007DFF').onClick((): void => this.resetTime())
+              Button('清空').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#999999').onClick((): void => this.clearLogs())
+            }.width('100%')
           }
           .width('100%')
           .padding(16)
@@ -479,17 +502,9 @@ struct Index {
           // 日志区域
           Column() {
             Row() {
-              Text('执行日志')
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-                .layoutWeight(1)
-
-              Text(`${this.logs.length} 条`)
-                .fontSize(12)
-                .fontColor('#999999')
-            }
-            .width('100%')
-            .margin({ bottom: 8 })
+              Text('执行日志').fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1)
+              Text(`${this.logs.length} 条`).fontSize(12).fontColor('#999999')
+            }.width('100%').margin({ bottom: 8 })
 
             Scroll() {
               Column() {
@@ -505,7 +520,7 @@ struct Index {
             }
             .scrollable(ScrollDirection.Vertical)
             .scrollBar(BarState.Auto)
-            .height(300)
+            .height(250)
             .backgroundColor('#F5F5F5')
             .padding(8)
             .borderRadius(4)
