@@ -1,0 +1,6 @@
+[submodule "lib_ffmpeg_utils"]
+	path = lib_ffmpeg_utils
+	url = https://github.com/jjjjjjava/ffmpeg_tools.git
+[submodule "lib_image_convert"]
+	path = lib_image_convert
+	url = https://github.com/jjjjjjava/image_convert.git
