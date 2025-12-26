@@ -10,9 +10,11 @@ import { buffer } from '@kit.ArkTS';
 import { FFmpegManager, FFmpegFactory, FFmpegCommandBuilder, TaskCallback, FLog, ContainerFormat, FFMpegUtils } from 'lib_ffmpeg_utils';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { ImageConverter, ImageFactory, ImageFormat } from 'lib_image_convert';
 
 // 转换格式类型
 type ConvertFormat = 'mp4' | 'flv' | 'avi' | 'mkv' | 'ts' | 'mp3' | 'aac';
+type ImageFormatType = 'jpg' | 'png' | 'bmp' | 'webp' | 'gif' | 'heif';
 
 @Entry
 @Component
@@ -37,16 +39,160 @@ struct Index {
   private outputFilePath: string = '';
   private taskId: string = '';
   @State watermarkPath: string = '';
+  @State selectedImagePath: string = '';
+  @State selectedImageFormat: ImageFormatType = 'png';
+  @State imageConvertTime: string = '--';
+  @State selectedVideoPath: string = ''; // 用户选择的视频路径
 
   aboutToAppear(): void {
     // 默认开启 native 层日志
-    FFMpegUtils.showLog(true);
-    
+    // FFMpegUtils.showLog(true);
+    //
     this.addLog('FFmpeg 测试页面初始化');
     this.addLog('⚠️ FFmpeg 不支持多线程并发，任务串行执行');
     this.addLog('🔧 硬件加速: h264_ohosavcodec');
     this.addLog('📝 Native 日志已开启');
+    this.addLog('🖼️ 支持图片格式转换: JPG/PNG/WEBP/BMP/GIF/HEIF (@prq/image-converter)');
     this.outputFilePath = getContext().filesDir + '/test_output.mp4';
+  }
+
+  /** 从图库选择图片进行格式转换 */
+  async selectImageForConvert(): Promise<boolean> {
+    try {
+      const picker = new photoAccessHelper.PhotoViewPicker();
+      const result = await picker.select({
+        MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE,
+        maxSelectNumber: 1
+      });
+      if (result.photoUris.length > 0) {
+        const uri = result.photoUris[0];
+        // 复制到应用沙箱目录
+        const destPath = getContext().filesDir + '/image_to_convert.tmp';
+        const srcFile = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
+        const destFile = fileIo.openSync(destPath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+        const buf = new ArrayBuffer(4096);
+        let readLen = fileIo.readSync(srcFile.fd, buf);
+        while (readLen > 0) {
+          fileIo.writeSync(destFile.fd, buf, { length: readLen });
+          readLen = fileIo.readSync(srcFile.fd, buf);
+        }
+        fileIo.closeSync(srcFile);
+        fileIo.closeSync(destFile);
+        this.selectedImagePath = destPath;
+        this.addLog(`✅ 已选择图片: ${uri}`);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      this.addLog(`❌ 选择图片失败: ${error}`);
+      return false;
+    }
+  }
+
+  /** 从视频库选择视频 */
+  async selectVideo(): Promise<boolean> {
+    try {
+      const picker = new photoAccessHelper.PhotoViewPicker();
+      const result = await picker.select({
+        MIMEType: photoAccessHelper.PhotoViewMIMETypes.VIDEO_TYPE,
+        maxSelectNumber: 1
+      });
+      if (result.photoUris.length > 0) {
+        const uri = result.photoUris[0];
+        // 复制到应用沙箱目录
+        const destPath = getContext().filesDir + '/selected_video.mp4';
+        this.addLog('📹 正在复制视频文件...');
+        const srcFile = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
+        const destFile = fileIo.openSync(destPath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+        const buf = new ArrayBuffer(1024 * 1024); // 1MB 缓冲区
+        let readLen = fileIo.readSync(srcFile.fd, buf);
+        while (readLen > 0) {
+          fileIo.writeSync(destFile.fd, buf, { length: readLen });
+          readLen = fileIo.readSync(srcFile.fd, buf);
+        }
+        fileIo.closeSync(srcFile);
+        fileIo.closeSync(destFile);
+        this.selectedVideoPath = destPath;
+        const stat = fileIo.statSync(destPath);
+        this.addLog(`✅ 已选择视频: ${(stat.size / 1024 / 1024).toFixed(2)} MB`);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      this.addLog(`❌ 选择视频失败: ${error}`);
+      return false;
+    }
+  }
+
+  /** 图片格式转换（使用 lib_image_convert 库） */
+  async testImageConvert(format: ImageFormatType): Promise<void> {
+    if (this.isConverting) return;
+
+    // 如果没有选择图片，先让用户选择
+    if (this.selectedImagePath === '') {
+      this.addLog('🖼️ 请先选择图片...');
+      const selected = await this.selectImageForConvert();
+      if (!selected) {
+        this.addLog('⚠️ 未选择图片，取消操作');
+        return;
+      }
+    }
+
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.imageConvertTime = '计时中...';
+    this.selectedImageFormat = format;
+    this.statusText = `转换图片为 ${format.toUpperCase()}...`;
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog(`🖼️ 图片格式转换 (@prq/image-converter): → ${format.toUpperCase()}`);
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + `/converted_image.${format}`;
+
+    try {
+      // 使用 ImageFactory 快捷方法（更简单）
+      switch (format) {
+        case 'jpg':
+          this.addLog('📝 使用 ImageFactory.toJpeg()');
+          await ImageFactory.toJpeg(this.selectedImagePath, output, 90);
+          break;
+        case 'png':
+          this.addLog('📝 使用 ImageFactory.toPng()');
+          await ImageFactory.toPng(this.selectedImagePath, output);
+          break;
+        case 'webp':
+          this.addLog('📝 使用 ImageFactory.toWebp()');
+          await ImageFactory.toWebp(this.selectedImagePath, output, 90);
+          break;
+        case 'bmp':
+          this.addLog('📝 使用 ImageFactory.toBmp()');
+          await ImageFactory.toBmp(this.selectedImagePath, output);
+          break;
+        case 'gif':
+          this.addLog('📝 使用 ImageFactory.toGif()');
+          await ImageFactory.toGif(this.selectedImagePath, output);
+          break;
+        case 'heif':
+          this.addLog('📝 使用 ImageFactory.toHeif()');
+          await ImageFactory.toHeif(this.selectedImagePath, output, 90);
+          break;
+        default:
+          await ImageFactory.toJpeg(this.selectedImagePath, output, 90);
+      }
+
+      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+      this.statusText = '✅ 完成';
+      this.addLog(`✅ 成功！耗时: ${duration}s`);
+      this.imageConvertTime = `${duration}s`;
+      this.checkOutputFile(output);
+      this.addLog(`💾 输出路径: ${output}`);
+      this.isConverting = false;
+    } catch (error) {
+      this.statusText = '❌ 失败';
+      this.addLog(`❌ 转换失败: ${error}`);
+      this.imageConvertTime = '失败';
+      this.isConverting = false;
+    }
   }
 
   /** 从图库选择水印图片 */
@@ -175,8 +321,19 @@ struct Index {
   // ============================================================
 
   /** 视频缩放（硬解硬编） */
-  testScale(): void {
+  async testScale(): Promise<void> {
     if (this.isConverting) return;
+
+    // 如果没有选择视频，先让用户选择
+    if (this.selectedVideoPath === '') {
+      this.addLog('📹 请先选择视频...');
+      const selected = await this.selectVideo();
+      if (!selected) {
+        this.addLog('⚠️ 未选择视频，使用默认测试视频');
+        this.selectedVideoPath = Index.TEST_VIDEO_URL;
+      }
+    }
+
     this.isConverting = true;
     this.convertProgress = 0;
     this.hwTime = '计时中...';
@@ -186,7 +343,7 @@ struct Index {
 
     const startTime = Date.now();
     const output = getContext().filesDir + '/scale_720p.mp4';
-    const cmd = FFmpegFactory.scale(Index.TEST_VIDEO_URL, output, 1280, 720);
+    const cmd = FFmpegFactory.scale(this.selectedVideoPath, output, 1280, 720);
     this.addLog(`命令: ${cmd.join(' ')}`);
 
     this.executeTask(cmd, startTime, (duration: string): void => {
@@ -196,8 +353,19 @@ struct Index {
   }
 
   /** 视频转码（硬解硬编） */
-  testTranscode(): void {
+  async testTranscode(): Promise<void> {
     if (this.isConverting) return;
+
+    // 如果没有选择视频，先让用户选择
+    if (this.selectedVideoPath === '') {
+      this.addLog('📹 请先选择视频...');
+      const selected = await this.selectVideo();
+      if (!selected) {
+        this.addLog('⚠️ 未选择视频，使用默认测试视频');
+        this.selectedVideoPath = Index.TEST_VIDEO_URL;
+      }
+    }
+
     this.isConverting = true;
     this.convertProgress = 0;
     this.hwTime = '计时中...';
@@ -207,7 +375,7 @@ struct Index {
 
     const startTime = Date.now();
     const output = getContext().filesDir + '/transcode_2m.mp4';
-    const cmd = FFmpegFactory.transcode(Index.TEST_VIDEO_URL, output, '2M');
+    const cmd = FFmpegFactory.transcode(this.selectedVideoPath, output, '2M');
     this.addLog(`命令: ${cmd.join(' ')}`);
 
     this.executeTask(cmd, startTime, (duration: string): void => {
@@ -353,6 +521,7 @@ struct Index {
     this.copyTime = '--';
     this.formatTime = '--';
     this.hwTime = '--';
+    this.imageConvertTime = '--';
     this.addLog('⏱️ 计时已重置');
   }
 
@@ -418,6 +587,18 @@ struct Index {
                   .fontWeight(FontWeight.Bold)
                   .fontColor('#4CAF50')
               }.layoutWeight(1)
+
+              Divider().vertical(true).height(40).color('#E5E5E5')
+
+              Column() {
+                Text('图片转换')
+                  .fontSize(12)
+                  .fontColor('#999999')
+                Text(this.imageConvertTime)
+                  .fontSize(18)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor('#E91E63')
+              }.layoutWeight(1)
             }
             .width('100%')
             .padding(8)
@@ -474,14 +655,49 @@ struct Index {
               .width('100%')
               .margin({ bottom: 8 })
 
+            Button(this.selectedVideoPath === '' ? '选择视频 📹' : '已选择视频 ✅')
+              .width('100%')
+              .height(44)
+              .backgroundColor(this.selectedVideoPath === '' ? '#673AB7' : '#4CAF50')
+              .enabled(!this.isConverting)
+              .onClick((): void => { this.selectVideo(); })
+              .margin({ bottom: 8 })
+
             Row() {
-              Button('缩放 720p 🚀').layoutWeight(1).height(40).backgroundColor('#4CAF50').enabled(!this.isConverting).onClick((): void => this.testScale())
-              Button('转码 2M 🚀').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#2196F3').enabled(!this.isConverting).onClick((): void => this.testTranscode())
+              Button('缩放 720p 🚀').layoutWeight(1).height(40).backgroundColor('#4CAF50').enabled(!this.isConverting).onClick((): void => { this.testScale(); })
+              Button('转码 2M 🚀').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#2196F3').enabled(!this.isConverting).onClick((): void => { this.testTranscode(); })
             }.width('100%')
 
             Row() {
               Button(this.watermarkPath === '' ? '选择水印 📷' : '添加水印 🚀').layoutWeight(1).height(40).backgroundColor('#9C27B0').enabled(!this.isConverting).onClick((): void => { this.testWatermark(); })
               Button('Builder 🛠️').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#FF5722').enabled(!this.isConverting).onClick((): void => this.testBuilder())
+            }.width('100%').margin({ top: 8 })
+
+            Divider().margin({ top: 16, bottom: 16 }).color('#E5E5E5')
+
+            // 图片格式转换
+            Text('🖼️ 图片格式转换')
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .width('100%')
+              .margin({ bottom: 8 })
+
+            Button(this.selectedImagePath === '' ? '选择图片 📷' : '已选择图片 ✅')
+              .width('100%')
+              .height(44)
+              .backgroundColor(this.selectedImagePath === '' ? '#E91E63' : '#4CAF50')
+              .enabled(!this.isConverting)
+              .onClick((): void => { this.selectImageForConvert(); })
+
+            Row() {
+              Button('JPG').layoutWeight(1).height(40).backgroundColor(this.selectedImageFormat === 'jpg' ? '#E91E63' : '#999999').enabled(!this.isConverting).onClick((): void => { this.testImageConvert('jpg'); })
+              Button('PNG').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor(this.selectedImageFormat === 'png' ? '#E91E63' : '#999999').enabled(!this.isConverting).onClick((): void => { this.testImageConvert('png'); })
+            }.width('100%').margin({ top: 8 })
+
+            Row() {
+              Button('WEBP').layoutWeight(1).height(40).backgroundColor(this.selectedImageFormat === 'webp' ? '#E91E63' : '#999999').enabled(!this.isConverting).onClick((): void => { this.testImageConvert('webp'); })
+              Button('GIF').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor(this.selectedImageFormat === 'gif' ? '#E91E63' : '#999999').enabled(!this.isConverting).onClick((): void => { this.testImageConvert('gif'); })
+              Button('HEIF').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor(this.selectedImageFormat === 'heif' ? '#E91E63' : '#999999').enabled(!this.isConverting).onClick((): void => { this.testImageConvert('heif'); })
             }.width('100%').margin({ top: 8 })
 
             Divider().margin({ top: 16, bottom: 16 }).color('#E5E5E5')

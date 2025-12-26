@@ -1,0 +1,16 @@
+# Build
+/build/
+/node_modules/
+/oh_modules/
+
+# IDE
+/.idea/
+/.vscode/
+*.iml
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

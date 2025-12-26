@@ -1,0 +1,22 @@
+{
+  "name": "@prq/image-converter",
+  "version": "1.0.0",
+  "description": "HarmonyOS 图片格式转换工具库 - 基于原生 Image API，支持 JPEG/PNG/WEBP/BMP/GIF/HEIF 格式转换",
+  "main": "Index.ets",
+  "author": "prq",
+  "license": "MIT",
+  "homepage": "https://ohpm.openharmony.cn/#/cn/detail/@prq%2Fimage-converter",
+  "repository": "https://github.com/jjjjjjava/ffmpeg_tools",
+  "keywords": [
+    "image",
+    "converter",
+    "format",
+    "jpeg",
+    "png",
+    "webp",
+    "harmonyos",
+    "ohos",
+    "pixelmap"
+  ],
+  "dependencies": {}
+}
