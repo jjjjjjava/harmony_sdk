@@ -20,7 +20,7 @@
         "name": "default",
         "signingConfig": "default",
         "targetSdkVersion": "5.0.5(17)",
-        "compatibleSdkVersion": "5.0.5(17)",
+        "compatibleSdkVersion": "5.0.0(12)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
           "strictMode": {
@@ -55,6 +55,10 @@
     {
       "name": "lib_ffmpeg_utils",
       "srcPath": "./lib_ffmpeg_utils",
+    },
+    {
+      "name": "lib_image_convert",
+      "srcPath": "./lib_image_convert",
     }
   ]
 }
