@@ -7,7 +7,7 @@
  */
 
 import { buffer } from '@kit.ArkTS';
-import { FFmpegManager, FFmpegFactory, FFmpegCommandBuilder, TaskCallback, FLog, ContainerFormat, FFMpegUtils } from 'lib_ffmpeg_utils';
+import { FFmpegManager, FFmpegFactory, FFmpegCommandBuilder, TaskCallback, FLog, ContainerFormat, FFMpegUtils } from '@prq/ffmpeg-tools';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { ImageConverter, ImageFactory, ImageFormat } from 'lib_image_convert';

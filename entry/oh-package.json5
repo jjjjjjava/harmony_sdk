@@ -6,7 +6,7 @@
   "author": "prq",
   "license": "MIT",
   "dependencies": {
-    "lib_ffmpeg_utils": "file:../lib_ffmpeg_utils",
+    "@prq/ffmpeg-tools": "2.2.1",
     "lib_image_convert": "file:../lib_image_convert"
   }
 }
