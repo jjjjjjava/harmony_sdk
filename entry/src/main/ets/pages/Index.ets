@@ -7,7 +7,7 @@
  */
 
 import { buffer } from '@kit.ArkTS';
-import { FFmpegManager, FFmpegFactory, FFmpegCommandBuilder, TaskCallback, FLog, ContainerFormat, FFMpegUtils } from '@prq/ffmpeg-tools';
+import { FFmpegManager, FFmpegFactory, FFmpegCommandBuilder, TaskCallback, FLog, ContainerFormat, FFMpegUtils } from 'lib_ffmpeg_utils';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { ImageConverter, ImageFactory, ImageFormat } from 'lib_image_convert';
@@ -416,7 +416,7 @@ struct Index {
     });
   }
 
-  /** 视频裁剪 */
+  /** 视频裁剪（时间裁剪） */
   testCut(): void {
     if (this.isConverting) return;
     this.isConverting = true;
@@ -434,6 +434,44 @@ struct Index {
     this.executeTask(cmd, startTime, (duration: string): void => {
       this.hwTime = duration;
       this.checkOutputFile(output);
+    });
+  }
+
+  /** 视频画面裁剪（crop + 硬编码） */
+  async testVideoCrop(): Promise<void> {
+    if (this.isConverting) return;
+
+    // 如果没有选择视频，先让用户选择
+    if (this.selectedVideoPath === '') {
+      this.addLog('📹 请先选择视频...');
+      const selected = await this.selectVideo();
+      if (!selected) {
+        this.addLog('⚠️ 未选择视频，取消操作');
+        return;
+      }
+    }
+
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.hwTime = '计时中...';
+    this.statusText = '✂️ 裁剪画面（左上角）...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('✂️ 视频画面裁剪（crop + 硬编码）');
+    this.addLog('📐 裁剪区域: 左上角 640x360');
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + '/crop_output.mp4';
+    
+    // 裁剪左上角 640x360 区域（从 0,0 开始）
+    const cmd = FFmpegFactory.videoCrop(this.selectedVideoPath, output, 640, 360, 0, 0);
+    
+    this.addLog(`命令: ${cmd.join(' ')}`);
+    this.addLog('⚙️ 流程: 硬解码 → crop滤镜(CPU) → 硬编码');
+
+    this.executeTask(cmd, startTime, (duration: string): void => {
+      this.hwTime = duration;
+      this.checkOutputFile(output);
+      this.addLog('💡 提示: crop滤镜在CPU执行，但解码和编码使用硬件加速');
     });
   }
 
@@ -669,8 +707,12 @@ struct Index {
             }.width('100%')
 
             Row() {
-              Button(this.watermarkPath === '' ? '选择水印 📷' : '添加水印 🚀').layoutWeight(1).height(40).backgroundColor('#9C27B0').enabled(!this.isConverting).onClick((): void => { this.testWatermark(); })
+              Button('裁剪画面 ✂️').layoutWeight(1).height(40).backgroundColor('#FF9800').enabled(!this.isConverting).onClick((): void => { this.testVideoCrop(); })
               Button('Builder 🛠️').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#FF5722').enabled(!this.isConverting).onClick((): void => this.testBuilder())
+            }.width('100%').margin({ top: 8 })
+
+            Row() {
+              Button(this.watermarkPath === '' ? '选择水印 📷' : '添加水印 🚀').layoutWeight(1).height(40).backgroundColor('#9C27B0').enabled(!this.isConverting).onClick((): void => { this.testWatermark(); })
             }.width('100%').margin({ top: 8 })
 
             Divider().margin({ top: 16, bottom: 16 }).color('#E5E5E5')
