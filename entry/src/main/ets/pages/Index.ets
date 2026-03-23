@@ -437,7 +437,7 @@ struct Index {
     });
   }
 
-  /** 视频画面裁剪（crop + 硬编码） */
+  /** 视频画面裁剪（crop + 硬编码 + 低码率） */
   async testVideoCrop(): Promise<void> {
     if (this.isConverting) return;
 
@@ -454,25 +454,158 @@ struct Index {
     this.isConverting = true;
     this.convertProgress = 0;
     this.hwTime = '计时中...';
-    this.statusText = '✂️ 裁剪画面（左上角）...';
+    this.statusText = '✂️ 裁剪画面（低码率）...';
     this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    this.addLog('✂️ 视频画面裁剪（crop + 硬编码）');
+    this.addLog('✂️ 视频画面裁剪（crop + 硬编码 + 低码率）');
     this.addLog('📐 裁剪区域: 左上角 640x360');
+    this.addLog('🎯 码率设置: 500k（低码率测试）');
 
     const startTime = Date.now();
-    const output = getContext().filesDir + '/crop_output.mp4';
+    const output = getContext().filesDir + '/crop_low_bitrate.mp4';
     
-    // 裁剪左上角 640x360 区域（从 0,0 开始）
-    const cmd = FFmpegFactory.videoCrop(this.selectedVideoPath, output, 640, 360, 0, 0);
+    // 裁剪左上角 640x360 区域，使用 500k 低码率
+    const cmd = FFmpegFactory.videoCrop(this.selectedVideoPath, output, 640, 360, 0, 0, '300k');
     
     this.addLog(`命令: ${cmd.join(' ')}`);
-    this.addLog('⚙️ 流程: 硬解码 → crop滤镜(CPU) → 硬编码');
+    this.addLog('⚙️ 流程: 硬解码 → crop滤镜(CPU) → 硬编码(500k)');
 
     this.executeTask(cmd, startTime, (duration: string): void => {
       this.hwTime = duration;
       this.checkOutputFile(output);
-      this.addLog('💡 提示: crop滤镜在CPU执行，但解码和编码使用硬件加速');
+      this.addLog('💡 提示: 低码率会明显降低视频质量和文件大小');
+      this.addLog('📊 对比: 可与默认码率输出对比画质差异');
     });
+  }
+
+  /** 降低码率（硬解硬编） */
+  async testLowerBitrate(): Promise<void> {
+    if (this.isConverting) return;
+
+    // 如果没有选择视频，先让用户选择
+    if (this.selectedVideoPath === '') {
+      this.addLog('📹 请先选择视频...');
+      const selected = await this.selectVideo();
+      if (!selected) {
+        this.addLog('⚠️ 未选择视频，使用默认测试视频');
+        this.selectedVideoPath = Index.TEST_VIDEO_URL;
+      }
+    }
+
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.hwTime = '计时中...';
+    this.statusText = '📉 降低码率...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('📉 降低码率（硬解硬编）');
+    this.addLog('🎯 目标码率: 500k（大幅降低文件大小）');
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + '/low_bitrate_300k.mp4';
+    const cmd = FFmpegFactory.transcode(this.selectedVideoPath, output, '300k');
+    this.addLog(`命令: ${cmd.join(' ')}`);
+    this.addLog('⚙️ 流程: 硬解码 → 硬编码(500k) → 输出');
+
+    this.executeTask(cmd, startTime, (duration: string): void => {
+      this.hwTime = duration;
+      this.checkOutputFile(output);
+      this.addLog('💡 提示: 500k 码率适合网络传输，但画质会有损失');
+      this.addLog('📊 建议: 可尝试不同码率如 800k、1M、1.5M 对比效果');
+    });
+  }
+
+  /** 查询编码器信息 */
+  testEncoderInfo(): void {
+    if (this.isConverting) return;
+    this.isConverting = true;
+    this.statusText = '🔍 查询编码器信息...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('🔍 查询 h264_ohosavcodec 编码器信息');
+    this.addLog('📋 执行命令: ffmpeg -h encoder=h264_ohosavcodec');
+
+    const cmd = ['ffmpeg', '-h', 'encoder=h264_ohosavcodec'];
+
+    FFMpegUtils.executeFFmpegCommand({
+      cmds: cmd,
+      onFFmpegProgress: (progress: number): void => {
+        // 查询命令不会有进度
+      },
+      onFFmpegFail: (code: number, msg: string): void => {
+        this.addLog(`❌ 查询失败: ${code} - ${msg}`);
+        this.addLog('💡 提示: 请查看 Native 日志输出，编码器信息会打印在那里');
+        this.isConverting = false;
+        this.statusText = '查询失败';
+      },
+      onFFmpegSuccess: (): void => {
+        this.addLog('✅ 查询命令执行完成');
+        this.addLog('📱 请查看 DevEco Studio 的日志窗口（Logcat）');
+        this.addLog('🔍 搜索关键词: "Encoder h264_ohosavcodec" 或 "AVOptions"');
+        this.addLog('');
+        this.addLog('📝 日志中会显示编码器支持的所有参数，包括：');
+        this.addLog('   - bit_rate (码率)');
+        this.addLog('   - qp (量化参数)');
+        this.addLog('   - rc_mode (码率控制模式)');
+        this.addLog('   - quality (质量等级)');
+        this.addLog('   等等...');
+        this.isConverting = false;
+        this.statusText = '查询完成，请查看日志';
+      }
+    });
+  }
+
+  /** 测试 Issue #6: 直接使用 execute 方法导致崩溃 */
+  testExecuteCrash(): void {
+    if (this.isConverting) return;
+    this.isConverting = true;
+    this.statusText = '⚠️ 测试 execute 崩溃...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('⚠️ Issue #6: 测试直接使用 execute 方法');
+    this.addLog('📋 执行命令: ffmpeg -version');
+    this.addLog('🔧 使用方法: FFmpegManager.getInstance().execute()');
+
+    try {
+      const cmd = ['ffmpeg', '-version'];
+      const callback: TaskCallback = Object({
+        onStart: (): void => {
+          this.addLog('✅ onStart 回调触发');
+        },
+        onProgress: (progress: number): void => {
+          this.addLog(`📊 进度: ${(progress * 100).toFixed(1)}%`);
+        },
+        onSuccess: (): void => {
+          this.addLog('✅ onSuccess 回调触发');
+          this.addLog('✅ 测试成功！没有崩溃');
+          this.isConverting = false;
+          this.statusText = '测试完成';
+        },
+        onFailure: (): void => {
+          this.addLog('❌ onFailure 回调触发');
+          this.addLog('⚠️ 命令执行失败');
+          this.isConverting = false;
+          this.statusText = '测试失败';
+        },
+        onError: (error: Error): void => {
+          this.addLog(`❌ onError 回调触发: ${error.message}`);
+          this.isConverting = false;
+          this.statusText = '发生错误';
+        },
+        onCancelled: (): void => {
+          this.addLog('🚫 onCancelled 回调触发');
+          this.isConverting = false;
+          this.statusText = '已取消';
+        }
+      });
+
+      // 直接调用 execute 方法（可能导致崩溃）
+      const taskId = FFmpegManager.getInstance().execute(cmd, 30000, callback);
+      this.taskId = taskId;
+      this.addLog(`📝 任务ID: ${taskId}`);
+      this.addLog('⏳ 等待执行结果...');
+    } catch (error) {
+      this.addLog(`❌ 捕获异常: ${error}`);
+      this.addLog('💥 应用可能即将崩溃...');
+      this.isConverting = false;
+      this.statusText = '捕获异常';
+    }
   }
 
   /** Builder 自定义命令 */
@@ -504,6 +637,48 @@ struct Index {
     this.executeTask(cmd, startTime, (duration: string): void => {
       this.hwTime = duration;
       this.checkOutputFile(output);
+    });
+  }
+
+  /** 码率对比测试 - 缩放 + 不同码率 */
+  async testBitrateComparison(): Promise<void> {
+    if (this.isConverting) return;
+
+    // 如果没有选择视频，先让用户选择
+    if (this.selectedVideoPath === '') {
+      this.addLog('📹 请先选择视频...');
+      const selected = await this.selectVideo();
+      if (!selected) {
+        this.addLog('⚠️ 未选择视频，取消操作');
+        return;
+      }
+    }
+
+    this.isConverting = true;
+    this.convertProgress = 0;
+    this.hwTime = '计时中...';
+    this.statusText = '📊 码率对比测试...';
+    this.addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.addLog('📊 码率对比测试（720p 不同码率）');
+    this.addLog('🎯 测试目标: 验证码率参数是否生效');
+
+    const startTime = Date.now();
+    const output = getContext().filesDir + '/scale_720p_300k.mp4';
+    
+    // 缩放到 720p，使用极低码率 300k
+    const cmd = FFmpegFactory.scale(this.selectedVideoPath, output, 1280, 720, '300k');
+    
+    this.addLog(`命令: ${cmd.join(' ')}`);
+    this.addLog('⚙️ 参数: 1280x720 @ 300k（极低码率）');
+    this.addLog('📝 说明: 300k 码率会产生明显的压缩痕迹');
+
+    this.executeTask(cmd, startTime, (duration: string): void => {
+      this.hwTime = duration;
+      this.checkOutputFile(output);
+      this.addLog('✅ 测试完成！请对比以下输出：');
+      this.addLog('   - scale_720p_300k.mp4（本次，300k）');
+      this.addLog('   - scale_720p.mp4（之前，默认高质量）');
+      this.addLog('💡 如果两个文件画质明显不同，说明码率参数已生效');
     });
   }
 
@@ -707,8 +882,17 @@ struct Index {
             }.width('100%')
 
             Row() {
-              Button('裁剪画面 ✂️').layoutWeight(1).height(40).backgroundColor('#FF9800').enabled(!this.isConverting).onClick((): void => { this.testVideoCrop(); })
-              Button('Builder 🛠️').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#FF5722').enabled(!this.isConverting).onClick((): void => this.testBuilder())
+              Button('降低码率 📉').layoutWeight(1).height(40).backgroundColor('#FF6B6B').enabled(!this.isConverting).onClick((): void => { this.testLowerBitrate(); })
+              Button('裁剪画面 ✂️').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#FF9800').enabled(!this.isConverting).onClick((): void => { this.testVideoCrop(); })
+            }.width('100%').margin({ top: 8 })
+
+            Row() {
+              Button('Builder 🛠️').layoutWeight(1).height(40).backgroundColor('#FF5722').enabled(!this.isConverting).onClick((): void => this.testBuilder())
+              Button('查询编码器 🔍').layoutWeight(1).height(40).margin({ left: 8 }).backgroundColor('#9C27B0').enabled(!this.isConverting).onClick((): void => { this.testEncoderInfo(); })
+            }.width('100%').margin({ top: 8 })
+
+            Row() {
+              Button('测试崩溃 ⚠️ #6').width('100%').height(40).backgroundColor('#F44336').enabled(!this.isConverting).onClick((): void => { this.testExecuteCrash(); })
             }.width('100%').margin({ top: 8 })
 
             Row() {
